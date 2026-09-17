@@ -3,7 +3,6 @@ export AWS_PROFILE="$STUDENT_ID"
 export AWS_REGION="ap-northeast-2"
 export AWS_PAGER=""
 
-export MY_KEY_NAME="${STUDENT_ID}-key"
 export MY_SG_NAME="${STUDENT_ID}-web-sg"
 export MY_INSTANCE_NAME="${STUDENT_ID}-managed-ec2"
 export MY_REUSE_INSTANCE_NAME="${STUDENT_ID}-compose-ec2"
@@ -205,3 +204,135 @@ export REDIS_PORT=$(aws elasticache describe-cache-clusters \
 --query "CacheClusters[0].CacheNodes[0].Endpoint.Port" --output text)
 
 echo "확정된 ElastiCache 엔드포인트:$REDIS_ENDPOINT:$REDIS_PORT"
+
+```bash
+ssh -i ./"$MY_KEY_NAME".pem -o StrictHostKeyChecking=accept-new ubuntu@"$PUBLIC_IP"
+```
+
+```bash
+# 우분투 내부에서
+# rm .env.rds
+vi .env.rds
+# i -> esc :wq
+cat .env.rds
+```
+
+```bash
+# .env.rds
+DB_NAME=appdb
+DB_USER=admin
+DB_PASSWORD=$MY_DB_PASSWORD
+RDS_ENDPOINT=$RDS_ENDPOINT
+APP_MESSAGE=Live on AWS EC2 Node 1 via Compose + RDS!
+SPRING_JPA_HIBERNATE_DDL_AUTO=update
+SPRING_DATASOURCE_HIKARI_CONNECTIONTIMEOUT=30000
+```
+
+```yaml
+vi compose.yml
+```
+
+```yaml
+# compose.yml
+name: aws-managed
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - frontend-net
+
+  app:
+    image: ghcr.io/a1l1ke/simple-back-ghcr:latest
+    container_name: spring-app
+    restart: on-failure
+    env_file:
+      - .env.rds
+    environment:
+      PORT: 8080
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+      SPRING_DATASOURCE_URL: "jdbc:mysql://${RDS_ENDPOINT}:3306/${DB_NAME}?createDatabaseIfNotExist=true"
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+    networks:
+      - frontend-net
+
+networks:
+  frontend-net:
+```
+
+```yaml
+# rm nginx.conf
+vi nginx.conf
+```
+
+```bash
+events {
+    worker_connections 1024;
+}
+
+http {
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://backend_servers;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+    upstream backend_servers {
+        server app:8080;
+    }
+}
+```
+
+```bash
+sudo docker compose --env-file .env.rds config
+sudo docker compose --env-file .env.rds up -d
+sudo docker compose --env-file .env.rds logs app
+```
+
+sudo docker compose down
+sudo docker compose --env-file .env.rds up -d
+sudo docker compose --env-file .env.rds logs app
+
+curl -fsS https://checkip.amazonaws.com
+echo http://$(curl -fsS https://checkip.amazonaws.com)
+
+
+export REDIS_ENDPOINT=student13-redis.38nsfo.0001.apn2.cache.amazonaws.com
+export STUDENT_ID=student13
+export REDIS_PORT=6379
+echo ${REDIS_ENDPOINT} ${REDIS_PORT} ${STUDENT_ID}
+
+set -e
+sudo apt-get update -y
+sudo apt-get install -y redis-tools
+
+redis-cli -h "$REDIS_ENDPOINT" -p "$REDIS_PORT" ping
+
+redis-cli -h "$REDIS_ENDPOINT" -p "$REDIS_PORT" \
+set "${STUDENT_ID}:ec2" "connected-from-ec2"
+
+redis-cli -h "$REDIS_ENDPOINT" -p "$REDIS_PORT" \
+get "${STUDENT_ID}:ec2"
+
+redis-cli -h "$REDIS_ENDPOINT" -p "$REDIS_PORT" \
+del "${STUDENT_ID}:ec2"
